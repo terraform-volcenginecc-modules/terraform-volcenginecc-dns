@@ -14,12 +14,14 @@ Provide `zone_name`, `website_ipv4`, `website_ipv6`, `mail_ipv4`, `regional_api_
 
 Credentials and `region` belong to the caller. Use a private variable file and credential manager.
 
+Use `-parallelism=1` for apply and destroy to serialize resource operations and mitigate `ErrDBDeadlock` within this Terraform run. The existing `dns_ipv6` dependency also orders AAAA after the other records. Terraform's concurrency limit is a CLI setting and cannot be configured inside a module; other callers can still write concurrently. This mitigation still requires real-cloud validation.
+
 Module source: `terraform-volcenginecc-modules/dns/volcenginecc`; module version: `version = "~> 1.0"` (>= 1.0.0, < 2.0.0). Provider version requirements are separate. Registry installation requires a published module release in this range.
 
 ```shell
 terraform init
 terraform plan -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars
+terraform apply -parallelism=1 -var-file=terraform.tfvars
 terraform output
 terraform plan -var-file=terraform.tfvars
 ```
@@ -31,7 +33,7 @@ For the optional weighted scenario, first enable load balancing outside Terrafor
 Health-check routing and automatic failover have no corresponding fields/resources in the verified provider schema. A CNAME pointing to a service is ordinary CNAME, not Route53 alias or health-aware routing. These scenarios remain deferred.
 
 ```shell
-terraform destroy -var-file=terraform.tfvars
+terraform destroy -parallelism=1 -var-file=terraform.tfvars
 ```
 
 Create mode removes owned records and the zone; existing mode removes only owned records. Confirm API absence after cleanup and account for DNS TTL. External load-balancing settings and external records remain caller-owned. On 2026-11-05, Terraform 1.5.7 and online provider 0.0.73 passed plan/apply, all nine records' API read-back, a normal second no-change plan and standard destroy with deletion confirmation for all ten resources. Both assigned authoritative servers returned the expected configured answers; public resolution did not pass because registrar delegation remained unchanged. Mobile-client routing behavior, weighted behavior and failover remain unverified.
