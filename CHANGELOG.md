@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Sequence the complete example's AAAA record after other records to mitigate concurrent DNS writes; preserve outputs and migrate existing AAAA state with a moved block.
+
 - Draft public DNS zone and keyed-record module with basic and complete examples.
 - Explicit external-zone ownership and externally enabled weighted-routing boundary.
 - Bilingual documentation and basic/complete examples.

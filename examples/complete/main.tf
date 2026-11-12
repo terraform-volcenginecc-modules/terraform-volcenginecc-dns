@@ -21,10 +21,6 @@ module "dns" {
       host = "@", type = "A", value = var.website_ipv4
       ttl  = 600, line = "default", remark = "Website", enable = true
     }
-    ipv6 = {
-      host = "@", type = "AAAA", value = var.website_ipv6
-      ttl  = 600, line = "default", remark = "IPv6 website", enable = true
-    }
     www = {
       host = "www", type = "CNAME", value = var.zone_name
       ttl  = 600, line = "default", remark = "Website CNAME", enable = true
@@ -63,4 +59,26 @@ module "dns" {
       ttl  = 600, line = "default", remark = "Weight secondary", enable = true, weight = 20
     }
   } : {})
+}
+
+# Avoid concurrent AAAA and other record writes to the same zone.
+module "dns_ipv6" {
+  source = "terraform-volcenginecc-modules/dns/volcenginecc"
+
+  depends_on = [module.dns]
+
+  create_zone      = false
+  existing_zone_id = module.dns.zone_id
+  records = {
+    ipv6 = {
+      host = "@", type = "AAAA", value = var.website_ipv6
+      ttl  = 600, line = "default", remark = "IPv6 website", enable = true
+    }
+  }
+}
+
+# Preserve an existing AAAA record when upgrading this example.
+moved {
+  from = module.dns.volcenginecc_dns_record.this["ipv6"]
+  to   = module.dns_ipv6.volcenginecc_dns_record.this["ipv6"]
 }

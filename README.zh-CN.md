@@ -41,6 +41,7 @@ provider "volcenginecc" {
 
 - `examples/basic`：一个已注册域名、一条网站 A 记录和分配的 NameServer 输出。
 - `examples/complete`：A/AAAA/CNAME/MX/TXT、多记录集、显式 TTL、记录启停、区域项目和标签，以及带默认兜底的非默认 API 线路。需提供域名功能版本允许的线路代码。
+- complete 使用第二次模块调用，让 AAAA 依赖其他记录完成，以缓解并发写入的 `ErrDBDeadlock`；输出保留全部逻辑 key，`moved` 声明迁移已有 AAAA State 地址。其他记录仍并发写入，本次改动尚未通过真实 API 复验。
 - complete 可选加权场景在已有区域配置两个权重为 80/20 的 A 记录值。需先在外部对准确的 `weighted`/`A`/`default` 记录集启用负载均衡；模块不能启用或检查该开关。已有加权记录必须 import，或从本模块配置中排除，避免重复创建。
 - 健康检查故障转移和别名场景推迟到 Provider 提供对应生命周期及配置后实现。当前不宣称存在可运行的故障转移示例。
 

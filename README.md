@@ -41,6 +41,7 @@ After creation, configure all `name_servers` at the registrar (or delegate a sub
 
 - `examples/basic`: one registered domain, one website A record and assigned name-server outputs.
 - `examples/complete`: A/AAAA/CNAME/MX/TXT records, explicit TTL, enabled/disabled records, zone project/tags and a non-default API line with a default fallback. Supply a line code allowed by the domain's edition.
+- In complete, AAAA depends on completion of the other records through a second module call to mitigate concurrent-write `ErrDBDeadlock`; outputs retain all logical keys and a `moved` block preserves the existing AAAA state address. Other record writes remain concurrent. This change has not yet been validated against the live API.
 - The optional complete weighted scenario configures two A values with 80/20 weights in an existing zone. First enable load balancing externally for the exact `weighted`/`A`/`default` record set; the module cannot enable or check that switch. Existing weighted records must be imported or omitted from this module's configuration to avoid duplicate creation.
 - Health-check failover and alias scenarios are deferred until the provider exposes their lifecycle and configuration. No runnable failover example is claimed.
 

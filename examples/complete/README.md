@@ -2,6 +2,12 @@
 
 Configure website IPv4/IPv6, CNAME, mail MX/A, SPF TXT, a disabled record and API line routing with a default fallback. Create and own a zone with project/tags, or select an existing caller-owned zone before the first apply.
 
+The AAAA record is managed by a second module call, `dns_ipv6`, with `depends_on = [module.dns]`. It is created after the zone and all other records to avoid overlapping AAAA writes with other record writes when the DNS API returns `ErrDBDeadlock`. Destruction reverses this order: AAAA first, then the remaining records and owned zone. Other records still use Terraform's default concurrency; concurrent writes from other callers are not controlled. This mitigation requires a new real-cloud validation.
+
+The `moved` block transfers the existing `module.dns.volcenginecc_dns_record.this["ipv6"]` address to `module.dns_ipv6.volcenginecc_dns_record.this["ipv6"]`. Keep it when upgrading an existing state and review the plan; an unchanged AAAA record should move without recreation. The record outputs merge both module calls and retain the `ipv6` key.
+
+If other record types also encounter deadlocks, use `terraform apply -parallelism=1 -var-file=terraform.tfvars` to serialize the entire apply. Use the same flag on `terraform destroy` if needed. Terraform's concurrency limit is a CLI setting; `depends_on` only orders the two module calls.
+
 The module source is `terraform-volcenginecc-modules/dns/volcenginecc`. This draft has no published module version and Registry installation is not verified. Validation targets are Terraform 1.5.7 and OpenTofu 1.11.8 with provider 0.0.60 and 0.0.73; local checks rewrite source only in temporary copies.
 
 Provide `zone_name`, `website_ipv4`, `website_ipv6`, `mail_ipv4`, `regional_api_ipv4` and `routing_line`. The line must come from public DNS ListLines/ListCustomLines and be allowed by your domain edition. The default API route supplies a fallback, not health-based failover. In existing mode set `existing_zone_id`, ensure it matches `zone_name`, and inspect or import existing records before applying. Never change ownership mode in place.

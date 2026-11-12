@@ -2,6 +2,12 @@
 
 配置网站 IPv4/IPv6、CNAME、邮件 MX/A、SPF TXT、禁用记录和带默认兜底的 API 线路路由。可创建并拥有带项目和标签的区域，也可在首次 apply 前选择调用方拥有的既有区域。
 
+AAAA 记录由第二次模块调用 `dns_ipv6` 管理，设置 `depends_on = [module.dns]`，在区域与其他记录全部创建完成后创建，避免 DNS API 返回 `ErrDBDeadlock` 时 AAAA 写入与其他记录写入重叠。销毁顺序相反：先删除 AAAA，再删除其他记录与拥有的区域。其他记录仍采用 Terraform 默认并发，无法控制其他调用方的并发写入。本次缓解措施需要重新进行真实云验证。
+
+`moved` 声明将已有地址 `module.dns.volcenginecc_dns_record.this["ipv6"]` 迁移到 `module.dns_ipv6.volcenginecc_dns_record.this["ipv6"]`。升级已有 State 时保留此声明并检查 Plan；未修改的 AAAA 应只迁移地址、不重建。记录输出合并两次模块调用，保留 `ipv6` key。
+
+如果其他记录类型也出现死锁，可使用 `terraform apply -parallelism=1 -var-file=terraform.tfvars` 将整个 Apply 串行执行，必要时在 `terraform destroy` 使用相同参数。Terraform 的并发上限由 CLI 设置，`depends_on` 只规定两次模块调用的先后顺序。
+
 模块 source 为 `terraform-volcenginecc-modules/dns/volcenginecc`。当前 draft 没有已发布模块版本，尚未验证 Registry 安装。验证目标为 Terraform 1.5.7、OpenTofu 1.11.8 和 Provider 0.0.60、0.0.73；本地检查仅在临时副本中重写 source。
 
 提供 `zone_name`、`website_ipv4`、`website_ipv6`、`mail_ipv4`、`regional_api_ipv4` 和 `routing_line`。线路必须来自公网 DNS ListLines/ListCustomLines，且域名功能版本允许使用。默认 API 线路提供兜底，不是基于健康状态的故障转移。既有模式设置 `existing_zone_id`，确认其与 `zone_name` 匹配，并在 apply 前检查或 import 已有记录。不要原地切换归属模式。

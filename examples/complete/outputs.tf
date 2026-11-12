@@ -15,15 +15,15 @@ output "zone_status" {
 
 output "record_ids" {
   description = "Record IDs by logical key."
-  value       = module.dns.record_ids
+  value       = merge(module.dns.record_ids, module.dns_ipv6.record_ids)
 }
 
 output "record_set_ids" {
   description = "Read-only record-set IDs by logical key."
-  value       = module.dns.record_set_ids
+  value       = merge(module.dns.record_set_ids, module.dns_ipv6.record_set_ids)
 }
 
 output "records" {
   description = "Provider read-back of managed records."
-  value       = module.dns.records
+  value       = merge(module.dns.records, module.dns_ipv6.records)
 }
