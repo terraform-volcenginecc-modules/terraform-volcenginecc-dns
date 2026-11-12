@@ -6,6 +6,8 @@ The module source is `terraform-volcenginecc-modules/dns/volcenginecc`. It is an
 
 Provide `zone_name` and `website_ipv4` in a private variable file. Set provider credentials through your credential manager and select `region` if needed. Use your actual registered domain and website IP; there are no default domain or IP values.
 
+Module source: `terraform-volcenginecc-modules/dns/volcenginecc`; module version: `version = "~> 1.0"` (>= 1.0.0, < 2.0.0). Provider version requirements are separate. Registry installation requires a published module release in this range.
+
 ```shell
 terraform init
 terraform plan -var-file=terraform.tfvars

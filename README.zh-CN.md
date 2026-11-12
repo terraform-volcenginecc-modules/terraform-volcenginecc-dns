@@ -2,6 +2,8 @@
 
 基于 VolcengineCC 管理公网 DNS 托管区域和单条解析记录的 Terraform 模块，明确区分线路路由与需外部启用的加权路由。
 
+模块 source 为 `terraform-volcenginecc-modules/dns/volcenginecc`，模块版本约束为 `version = "~> 1.0"`（>= 1.0.0、< 2.0.0），与 Provider 版本要求分别配置。Registry 安装要求该范围内已有已发布模块版本。
+
 ## 1. 概述（Overview）
 
 创建一个 `volcenginecc_dns_zone`，通过稳定逻辑名称管理解析记录；也可传入调用方拥有的区域 ID，仅管理记录。每个 map 条目拥有一条单独记录，云端记录集 ID 仅作为只读输出。域名注册、所有权验证、注册商 NS 委派、服务端点及记录集负载均衡设置由调用方负责。

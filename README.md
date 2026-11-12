@@ -2,6 +2,8 @@
 
 Terraform module for public DNS zones and individual records using VolcengineCC, with explicit boundaries for line routing and externally enabled weighted routing.
 
+Module source: `terraform-volcenginecc-modules/dns/volcenginecc`; module version: `version = "~> 1.0"` (>= 1.0.0, < 2.0.0). Provider version requirements are separate. Registry installation requires a published module release in this range.
+
 ## 1. Overview
 
 Create one `volcenginecc_dns_zone` and manage records keyed by stable logical names, or manage records in a caller-owned zone by ID. Each map entry owns one individual record; cloud record-set IDs are read-only outputs. The caller owns domain registration, ownership verification, registrar delegation, service endpoints and any record-set load-balancing settings.

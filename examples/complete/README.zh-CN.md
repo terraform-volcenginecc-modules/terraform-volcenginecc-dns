@@ -14,6 +14,8 @@ AAAA 记录由第二次模块调用 `dns_ipv6` 管理，设置 `depends_on = [mo
 
 凭据和 `region` 由调用方配置，使用私有变量文件和凭据管理工具。
 
+模块 source 为 `terraform-volcenginecc-modules/dns/volcenginecc`，模块版本约束为 `version = "~> 1.0"`（>= 1.0.0、< 2.0.0），与 Provider 版本要求分别配置。Registry 安装要求该范围内已有已发布模块版本。
+
 ```shell
 terraform init
 terraform plan -var-file=terraform.tfvars

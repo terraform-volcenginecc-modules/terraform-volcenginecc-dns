@@ -14,6 +14,8 @@ Provide `zone_name`, `website_ipv4`, `website_ipv6`, `mail_ipv4`, `regional_api_
 
 Credentials and `region` belong to the caller. Use a private variable file and credential manager.
 
+Module source: `terraform-volcenginecc-modules/dns/volcenginecc`; module version: `version = "~> 1.0"` (>= 1.0.0, < 2.0.0). Provider version requirements are separate. Registry installation requires a published module release in this range.
+
 ```shell
 terraform init
 terraform plan -var-file=terraform.tfvars
