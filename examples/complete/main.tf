@@ -3,7 +3,8 @@ provider "volcenginecc" {
 }
 
 module "dns" {
-  source = "terraform-volcenginecc-modules/dns/volcenginecc"
+  source  = "terraform-volcenginecc-modules/dns/volcenginecc"
+  version = "~> 1.0"
 
   create_zone      = var.existing_zone_id == null
   existing_zone_id = var.existing_zone_id
@@ -63,7 +64,8 @@ module "dns" {
 
 # Avoid concurrent AAAA and other record writes to the same zone.
 module "dns_ipv6" {
-  source = "terraform-volcenginecc-modules/dns/volcenginecc"
+  source  = "terraform-volcenginecc-modules/dns/volcenginecc"
+  version = "~> 1.0"
 
   depends_on = [module.dns]
 

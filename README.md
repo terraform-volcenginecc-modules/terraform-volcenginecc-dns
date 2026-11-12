@@ -14,7 +14,8 @@ The Registry address is reserved for publication; this draft has no published mo
 
 ```hcl
 module "dns" {
-  source = "terraform-volcenginecc-modules/dns/volcenginecc"
+  source  = "terraform-volcenginecc-modules/dns/volcenginecc"
+  version = "~> 1.0"
 
   zone_name = var.registered_domain
   records = {

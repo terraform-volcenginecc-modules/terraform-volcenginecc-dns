@@ -14,7 +14,8 @@ Registry 地址用于后续发布；当前 draft 没有已发布模块版本，�
 
 ```hcl
 module "dns" {
-  source = "terraform-volcenginecc-modules/dns/volcenginecc"
+  source  = "terraform-volcenginecc-modules/dns/volcenginecc"
+  version = "~> 1.0"
 
   zone_name = var.registered_domain
   records = {
