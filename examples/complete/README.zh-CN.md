@@ -1,37 +1,127 @@
-# 公网 DNS 完整示例
+# COMPLETE 公网 DNS 示例
 
-配置网站 IPv4/IPv6、CNAME、邮件 MX/A、SPF TXT、禁用记录和带默认兜底的 API 线路路由。可创建并拥有带项目和标签的区域，也可在首次 apply 前选择调用方拥有的既有区域。
+## 1. 概述
 
-AAAA 记录由第二次模块调用 `dns_ipv6` 管理，设置 `depends_on = [module.dns]`，在区域与其他记录全部创建完成后创建，避免 DNS API 返回 `ErrDBDeadlock` 时 AAAA 写入与其他记录写入重叠。销毁顺序相反：先删除 AAAA，再删除其他记录与拥有的区域。其他记录仍采用 Terraform 默认并发，无法控制其他调用方的并发写入。本次缓解措施需要重新进行真实云验证。
+本示例配置网站 IPv4/IPv6、CNAME、邮件 A/MX、SPF TXT、禁用 TXT，以及带默认兜底的 API 线路路由。可创建带项目和标签的区域，或管理已有区域的记录；可选加权配置使用外部启用的负载均衡。调用方准备域名、服务地址、允许的线路代码及 NS 配置权限，相比 basic 覆盖更多记录类型和路由场景。
 
-`moved` 声明将已有地址 `module.dns.volcenginecc_dns_record.this["ipv6"]` 迁移到 `module.dns_ipv6.volcenginecc_dns_record.this["ipv6"]`。升级已有 State 时保留此声明并检查 Plan；未修改的 AAAA 应只迁移地址、不重建。记录输出合并两次模块调用，保留 `ipv6` key。
+## 2. 用法
 
-如果其他记录类型也出现死锁，可使用 `terraform apply -parallelism=1 -var-file=terraform.tfvars` 将整个 Apply 串行执行，必要时在 `terraform destroy` 使用相同参数。Terraform 的并发上限由 CLI 设置，`depends_on` 只规定两次模块调用的先后顺序。
+使用 Terraform 1.5.7，在 `examples/complete` 目录运行。通过运行环境设置 `VOLCENGINE_ACCESS_KEY` 和 `VOLCENGINE_SECRET_KEY`，账号需具备对应区域和记录的管理权限。
 
-模块 source 为 `terraform-volcenginecc-modules/dns/volcenginecc`。当前 draft 没有已发布模块版本，尚未验证 Registry 安装。验证目标为 Terraform 1.5.7、OpenTofu 1.11.8 和 Provider 0.0.60、0.0.73；本地检查仅在临时副本中重写 source。
+Apply 和 Destroy 均使用 `-parallelism=1`，将本次执行的所有资源操作串行化；`depends_on` 负责两次 Module 调用的先后顺序。并发度通过执行参数设置，不作为 Module 输入变量。
 
-提供 `zone_name`、`website_ipv4`、`website_ipv6`、`mail_ipv4`、`regional_api_ipv4` 和 `routing_line`。线路必须来自公网 DNS ListLines/ListCustomLines，且域名功能版本允许使用。默认 API 线路提供兜底，不是基于健康状态的故障转移。既有模式设置 `existing_zone_id`，确认其与 `zone_name` 匹配，并在 apply 前检查或 import 已有记录。不要原地切换归属模式。
+1. 编辑本目录的 `terraform.tfvars`。以下域名和地址用于展示格式，替换为你的已注册域名及真实服务地址；`routing_line` 从 ListLines/ListCustomLines 选择，需符合域名功能版本，且不能为 `"default"`。
 
-凭据和 `region` 由调用方配置，使用私有变量文件和凭据管理工具。
+   ```hcl
+   region                          = "cn-beijing"
+   zone_name                       = "example.com"
+   existing_zone_id                = null
+   project_name                    = "default"
+   website_ipv4                    = "192.0.2.10"
+   website_ipv6                    = "2001:db8::10"
+   mail_ipv4                       = "192.0.2.20"
+   regional_api_ipv4               = "192.0.2.30"
+   routing_line                    = "mobile"
+   enable_weighted_routing_example = false
+   ```
 
-模块 source 为 `terraform-volcenginecc-modules/dns/volcenginecc`，模块版本约束为 `version = "~> 1.0"`（>= 1.0.0、< 2.0.0），与 Provider 版本要求分别配置。Registry 安装要求该范围内已有已发布模块版本。
+   `existing_zone_id=null` 时创建区域，附带 `project_name`、`DNS complete` 备注及 `Environment=development`、`ManagedBy=Terraform` 标签。使用已有区域时填入其实际 ID，`zone_name` 仍必填，且必须与该区域域名一致；区域项目、备注和标签不会传递给 Module。首次 Apply 前确定模式，并检查已有记录是否冲突。
 
-```shell
-terraform init
-terraform plan -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars
-terraform output
-terraform plan -var-file=terraform.tfvars
-```
+2. 初始化并检查首次计划。默认新建模式预期新增一个区域和九条记录；已有区域模式预期仅新增九条记录。
 
-创建模式需在注册商配置输出的 NameServer 并完成域名所有权验证。既有模式的 `name_servers`、`zone_status` 为 null，需在外部检查委派和所有权。检查各类型 DNS 答案、MX 优先级 10、TXT 内容和线路路由，并确认禁用记录不生效。二次 Plan 必须无变更。
+   ```shell
+   terraform init
+   terraform plan
+   ```
 
-使用可选加权场景前，先在 Terraform 外部对既有区域准确的 `weighted`/`A`/`default` 记录集启用负载均衡，由独立所有者保留该设置。再设置 `enable_weighted_routing_example=true` 并传入 `existing_zone_id`。已有主备记录需使用 `zid|record_id` import 到模块的逻辑地址。模块传递 80/20 权重，不能启用或验证负载均衡开关；权重表示配置意图，不保证请求百分比。
+3. 创建资源并查看输出。`module.dns` 管理区域和其他记录，`module.dns_ipv6` 在前者完成后创建 AAAA，记录输出合并两次调用。
 
-已核对 Provider Schema 不包含健康检查路由或自动故障转移对应字段和资源。指向服务的 CNAME 是普通 CNAME，不是 Route53 别名或健康感知路由。这些场景暂缓实现。
+   ```shell
+   terraform apply -parallelism=1
+   terraform output
+   ```
 
-```shell
-terraform destroy -var-file=terraform.tfvars
-```
+   新建模式在注册商配置 `name_servers`，或在父区域配置子域 NS 委派，并完成必要的所有权验证。已有模式的 `name_servers`、`zone_status` 为 `null`，由调用方检查区域的所有权和委派。域名应已注册，NS 配置正确且状态正常。
 
-创建模式删除拥有的记录和区域；既有模式仅删除拥有的记录。清理后查询 API 确认移除，并考虑 DNS TTL。外部负载均衡设置和外部记录仍由调用方拥有。2026-11-05，Terraform 1.5.7 与线上 Provider 0.0.73 已通过真实 Plan/Apply、全部九条记录的 API 回读、正常刷新后二次 Plan 无变更及标准 Destroy，十个资源全部确认删除。两个分配的权威服务器返回期望记录；注册商委派未改变，公网解析未通过。移动客户端线路行为、加权行为和故障转移仍未验证。
+   委派生效后，通过普通递归 DNS 确认根域 A/AAAA、`www` CNAME、`mail` A、优先级为 10 的 MX 和 SPF TXT；启用记录的业务 TTL 为 600 秒，`maintenance` 不返回 TXT。对 API 使用匹配所选线路的客户端查询，同时使用其他来源确认默认线路兜底。来源路由不检查服务健康。
+
+4. 配置稳定后再次检查计划，预期无变化。
+
+   ```shell
+   terraform plan
+   ```
+
+5. 确认删除范围后清理。依赖关系使 AAAA 先删除，再删除其他记录及本配置创建的区域。
+
+   ```shell
+   terraform destroy -parallelism=1
+   ```
+
+可选加权配置只用于已有区域。先在外部为 `weighted/A/default` 准备记录集并启用负载均衡，然后设置 `enable_weighted_routing_example=true`，使用不同的 `website_ipv4` 和 `regional_api_ipv4`。该分支新增 `weighted_primary`、`weighted_secondary` 两个逻辑记录，权重分别为 80 和 20。已有值分别使用 `ZID|RecordID` 导入 `module.dns.volcenginecc_dns_record.this["weighted_primary"]` 和 `module.dns.volcenginecc_dns_record.this["weighted_secondary"]`，再检查 Plan 并 Apply，避免重复创建。Module 不启用或检查外部负载均衡开关。
+
+## 3. 依赖要求
+
+| 名称 | 版本 |
+|---|---|
+| Terraform | `>= 1.5.7, < 1.12.0` |
+| `volcengine/volcenginecc` | `>= 0.0.60` |
+
+操作步骤使用 Terraform 1.5.7。
+
+## 4. Providers
+
+| 名称 | 来源 |
+|---|---|
+| `volcenginecc` | `registry.terraform.io/volcengine/volcenginecc` |
+
+两次 Module 调用共用本目录配置的 Provider，不使用 alias。
+
+## 5. 资源
+
+| 名称 | 说明 |
+|---|---|
+| `module.dns` | 使用 `source = "terraform-volcenginecc-modules/dns/volcenginecc"` 和 `version = "~> 1.0"`；按模式创建区域或使用已有区域，管理八条基础记录及可选的两条加权记录。 |
+| `module.dns_ipv6` | 使用 `source = "terraform-volcenginecc-modules/dns/volcenginecc"` 和 `version = "~> 1.0"`；依赖 `module.dns`，通过其 `zone_id` 管理一条根域 AAAA。 |
+
+本 example root 不直接声明 Resource 或 Data Source。
+
+## 6. 输入
+
+| 名称 | 说明 |
+|---|---|
+| `region` | Provider 地域，默认 `"cn-beijing"`。 |
+| `zone_name` | 必填、无默认值；已注册且可管理的域名，也用于 CNAME 和 MX 目标；已有模式下必须与 `existing_zone_id` 对应的域名一致。 |
+| `existing_zone_id` | 可选，默认 `null`；为 `null` 时创建区域，指定非空区域 ID 时仅管理该区域的记录。首次 Apply 前选择模式。 |
+| `project_name` | 新建区域所属项目，默认 `"default"`；已有区域模式不使用该值。 |
+| `website_ipv4` | 必填、无默认值；根域 A 和默认 API 路由地址，也用于可选加权主记录。 |
+| `website_ipv6` | 必填、无默认值；根域 AAAA 地址，由 `dns_ipv6` 管理。 |
+| `mail_ipv4` | 必填、无默认值；`mail` A 地址，根域 MX 指向 `mail.zone_name`。 |
+| `regional_api_ipv4` | 必填、无默认值；非默认 API 线路地址，也用于可选加权次记录；启用加权时与主记录地址不同。 |
+| `routing_line` | 必填、无默认值；域名功能版本允许的非默认线路代码，不能为空白或 `"default"`。 |
+| `enable_weighted_routing_example` | 默认 `false`；设为 `true` 时必须使用已有区域，并先在外部启用 `weighted/A/default` 负载均衡。 |
+
+## 7. 输出
+
+| 名称 | 说明 |
+|---|---|
+| `zone_id` | 新建区域 ZID 或传入的已有区域 ID。 |
+| `name_servers` | 新建区域分配的权威服务器；已有区域模式为 `null`，需从区域管理方获取。 |
+| `zone_status` | 新建区域的运行状态、账号归属及 NS 配置状态；已有区域模式为 `null`。 |
+| `record_ids` | 合并两次调用的 RecordID 映射，包括 `ipv6`；加权启用时增加两个加权键。 |
+| `record_set_ids` | 合并两次调用的只读 RecordSetID 映射，用于定位记录集，不接管其负载均衡设置。 |
+| `records` | 合并两次调用的主机名、类型、TTL、线路、启停和权重，便于核对记录配置；返回权重不能用于判断加权开关是否启用。 |
+
+## 8. 示例
+
+本目录即为 complete 示例，适用于多类型解析、邮件配置、来源线路路由或已有区域记录管理。默认配置包含九条记录，可选加权分支增加两条记录；basic 只创建区域和一条网站 A 记录。
+
+## 9. 说明
+
+- Apply 和 Destroy 的并发度设为 1，使用 `terraform apply -parallelism=1` 和 `terraform destroy -parallelism=1` 串行执行所有资源操作。`depends_on` 负责两次 Module 调用的先后顺序，并发度通过运行命令设置。
+- 凭据通过 Provider 支持的运行环境传入，不写入源码或 `terraform.tfvars`。
+- Apply 后再次执行 `terraform plan`，只有结果无变化时才满足幂等要求。
+- 新建模式的 Destroy 删除本配置创建的区域和记录；已有模式保留区域，只删除本配置管理的记录。外部负载均衡开关和其他记录由其原管理方维护；本配置导入接管的记录也会被删除。
+- `zone_name` 与已有区域 ID 的对应关系由调用方确认。NS 和账号归属状态正确后，还需通过普通递归 DNS 检查公网答案；仅直查权威服务器无法确认注册商委派。
+- 升级包含旧 AAAA 地址的配置时，保留现有 `moved` 声明：`module.dns.volcenginecc_dns_record.this["ipv6"]` 迁移到 `module.dns_ipv6.volcenginecc_dns_record.this["ipv6"]`。检查 Plan，确认未修改的记录只迁移地址。
+- 80/20 权重是记录配置，实际请求比例受 DNS 缓存和客户端行为影响。默认线路是来源兜底，不是基于健康状态的故障转移。
+- 删除自建区域前迁移仍需保留的业务解析；记录修改或删除后，递归 DNS 可能在原 TTL 到期前继续返回缓存。
