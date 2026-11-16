@@ -1,124 +1,156 @@
 # terraform-volcenginecc-dns
 
-Terraform module for public DNS zones and individual records using VolcengineCC, with explicit boundaries for line routing and externally enabled weighted routing.
+Manage public DNS zones and individual records with VolcengineCC, including line routing and weighted routing enabled by the caller.
 
 ## 1. Overview
 
-Create one `volcenginecc_dns_zone` and manage records keyed by stable logical names, or manage records in a caller-owned zone by ID. Each map entry owns one individual record; cloud record-set IDs are read-only outputs. The caller owns domain registration, ownership verification, registrar delegation, service endpoints and any record-set load-balancing settings.
-
-Supports A, AAAA, CNAME, MX, TXT, NS and SRV configuration. Default and edition-permitted line routing are available. Health-check failover and Route53 alias targets have no corresponding DNS fields/resources in the verified provider schema. CNAME is an ordinary DNS record with its normal restrictions.
+Create a public DNS zone and manage its A, AAAA, CNAME, MX, TXT, NS and SRV records, or manage records in a caller-owned zone by ID. Stable logical names identify records, which reference their zone ID. The caller manages domain registration, ownership verification, NS delegation, service endpoints and record-set load-balancing settings.
 
 ## 2. Usage
 
-The Registry address is reserved for publication; this draft has no published module version and Registry consumption has not been verified. Local validation rewrites the source only in temporary copies.
+Prepare a registered domain you can manage, service addresses, and a Volcengine account with permission to manage DNS zones and records. Use Terraform 1.5.7, configure the provider in the calling project, and set `VOLCENGINE_ACCESS_KEY` and `VOLCENGINE_SECRET_KEY` through the runtime environment.
+
+The following `example.com` and `192.0.2.10` illustrate the configuration format. Replace them with your domain and website IPv4 address:
 
 ```hcl
-module "dns" {
-  source = "terraform-volcenginecc-modules/dns/volcenginecc"
+terraform {
+  required_version = ">= 1.5.7, < 1.12.0"
 
-  zone_name = var.registered_domain
+  required_providers {
+    volcenginecc = {
+      source  = "registry.terraform.io/volcengine/volcenginecc"
+      version = ">= 0.0.60"
+    }
+  }
+}
+
+provider "volcenginecc" {
+  region = "cn-beijing"
+}
+
+module "dns" {
+  source  = "terraform-volcenginecc-modules/dns/volcenginecc"
+  version = "~> 1.0"
+
+  zone_name = "example.com"
   records = {
     website = {
       host  = "www"
       type  = "A"
-      value = var.website_ipv4
+      value = "192.0.2.10"
     }
   }
 }
 ```
 
-Provider authentication and region belong to the caller. Set `VOLCENGINE_ACCESS_KEY` and `VOLCENGINE_SECRET_KEY` through your credential manager.
+With the default `create_zone=true`, this configuration creates one zone and one `www` A record. To use an existing zone, set `create_zone=false` and `existing_zone_id`, and keep `zone_name`, `project_name`, `zone_remark` and `tags` as `null`. This mode manages only the records declared in `records`; it does not query or take ownership of the existing zone.
 
-```hcl
-provider "volcenginecc" {
-  region = "cn-beijing"
-}
+Run from the calling project directory. Use `-parallelism=1` for both Apply and Destroy to execute resource operations sequentially within this Terraform run. Set concurrency through execution arguments; it is not a module input.
+
+```shell
+terraform init
+terraform plan
+terraform apply -parallelism=1
 ```
 
-After creation, configure all `name_servers` at the registrar (or delegate a subdomain at its parent), complete ownership verification if necessary, and check `zone_status`. Creating a zone alone does not establish public DNS delegation.
+After creating a zone, configure every returned `name_servers` entry at the registrar, or delegate a subdomain zone with NS records in its parent zone. Complete ownership verification if Cloud DNS requests domain recovery. In `zone_status`, `cache_stage=0` means the account can manage the domain, `is_ns_correct=true` means the NS configuration is correct, and `stage=0` means the zone is normal. Account ownership status does not establish domain registration or delegation.
+
+After delegation takes effect, query the actual service names through a normal recursive DNS resolver and check the record values. Querying an assigned authoritative server directly does not confirm public delegation. Destroy the resources only when they are no longer needed:
+
+```shell
+terraform plan
+terraform destroy -parallelism=1
+```
+
+The second Plan after Apply should show no changes. Before destroying resources, review zone and record ownership and migrate any service records that must remain available.
 
 ## 3. Examples
 
-- `examples/basic`: one registered domain, one website A record and assigned name-server outputs.
-- `examples/complete`: A/AAAA/CNAME/MX/TXT records, explicit TTL, enabled/disabled records, zone project/tags and a non-default API line with a default fallback. Supply a line code allowed by the domain's edition.
-- The optional complete weighted scenario configures two A values with 80/20 weights in an existing zone. First enable load balancing externally for the exact `weighted`/`A`/`default` record set; the module cannot enable or check that switch. Existing weighted records must be imported or omitted from this module's configuration to avoid duplicate creation.
-- Health-check failover and alias scenarios are deferred until the provider exposes their lifecycle and configuration. No runnable failover example is claimed.
+- basic: Run in `examples/basic` to create a zone and one website A record for a registered domain. Outputs include the zone ID, name servers, zone status and record IDs. Supply the domain, website IPv4 address and permission to change registrar settings.
+- complete: Run in `examples/complete` to configure A, AAAA, CNAME, MX, SPF TXT, a disabled TXT record and a non-default API line with a default fallback. Create a zone with project and tags, or manage records in an existing zone. The separate `dns_ipv6` call creates AAAA after the other records. The optional 80/20 weighted scenario requires an existing zone and externally enabled record-set load balancing.
 
 ## 4. Requirements
 
-| Name | Version / prerequisite |
+| Name | Version |
 |---|---|
-| Terraform | Statically verified: `1.5.7` |
-| OpenTofu | Statically verified: `1.11.8` |
-| Shared engine constraint | `>= 1.5.7, < 1.12.0`; other versions in this range are not individually verified |
-| Provider minimum | `0.0.60`; DNS zone and all used record fields exist in its schema |
-| Provider current verified version | `0.0.73`, released 2026-10-26 |
-| Domain | Registered public domain, permission to manage DNS and change delegation |
-| Advanced routing | DNS edition permitting requested line codes, TTL and weights |
+| Terraform | `>= 1.5.7, < 1.12.0` |
+| `volcengine/volcenginecc` | `>= 0.0.60` |
 
-Current status: **draft** because weighted routing requires external settings and failover/alias capabilities are deferred. Static validation does not establish successful public resolution or production readiness.
-
-On 2026-11-05, both engines passed fmt/init/validate/static plan with providers 0.0.60 and 0.0.73 for the root, basic, complete and lifecycle fixture, the optional external-zone weighted configuration, and 15 negative plans. Bilingual documentation and shell syntax checks passed. ShellCheck, TFLint and terraform-docs were unavailable and were not run.
+The operating steps use Terraform 1.5.7. The module constraint `version = "~> 1.0"` is configured separately from the provider version constraint.
 
 ## 5. Providers
 
-| Name | Source | Constraint |
-|---|---|---|
-| `volcenginecc` | `registry.terraform.io/volcengine/volcenginecc` | `>= 0.0.60` |
+| Name | Source |
+|---|---|
+| `volcenginecc` | `registry.terraform.io/volcengine/volcenginecc` |
+
+The caller configures the provider region and authentication. This module does not declare provider aliases.
 
 ## 6. Resources
 
-| Mode | Type | Address / responsibility |
+| Mode | Type | Name |
 |---|---|---|
-| Create | [volcenginecc_dns_zone](https://registry.terraform.io/providers/volcengine/volcenginecc/0.0.73/docs/resources/dns_zone) | `volcenginecc_dns_zone.this[0]`: own one zone |
-| Both | [volcenginecc_dns_record](https://registry.terraform.io/providers/volcengine/volcenginecc/0.0.73/docs/resources/dns_record) | `volcenginecc_dns_record.this[key]`: own individual records |
+| Create a zone, `create_zone=true` | Resource: `volcenginecc_dns_zone` | [`volcenginecc_dns_zone.this[0]`](https://registry.terraform.io/providers/volcengine/volcenginecc/latest/docs/resources/dns_zone) |
+| Create a zone or use an existing zone | Resource: `volcenginecc_dns_record` | [`volcenginecc_dns_record.this[key]`](https://registry.terraform.io/providers/volcengine/volcenginecc/latest/docs/resources/dns_record) |
 
-There are no data sources. External zones are passed by ID and are not queried or destroyed.
+The zone resource creates at most one instance. The number of record instances is determined by the entries in `records`. Each entry manages one individual record, even when the service groups several records into one record set. This module declares no data sources.
 
 ## 7. Inputs
 
-| Name | Type | Default | Required / description |
-|---|---|---|---|
-| `create_zone` | `bool` | `true` | Choose ownership before first apply |
-| `zone_name` | `string` | `null` | Required in create mode; lowercase ASCII/punycode domain without trailing dot |
-| `existing_zone_id` | `string` | `null` | Required in existing mode; zone must be caller-owned |
-| `project_name` | `string` | `null` | Created-zone project; unavailable in existing mode |
-| `zone_remark` | `string` | `null` | Created-zone remark; unavailable in existing mode |
-| `tags` | `set(object({key=string,value=string}))` | `null` | Created-zone tags; explicit values and unique nonempty keys; empty set rejected |
-| `acknowledge_external_weighted_routing` | `bool` | `false` | Required true for explicit weights in existing mode; external switch remains caller-owned |
-| `records` | `map(object(...))` | none | Required, possibly empty; stable keys own individual records |
-| `records.host` | `string` | none | Required relative prefix; `@` for apex; do not pass full zone name |
-| `records.type` | `string` | none | Required uppercase A/AAAA/CNAME/MX/TXT/NS/SRV |
-| `records.value` | `string` | none | Required; MX uses `10 mail.domain`; priority 1-99; TXT passed unchanged |
-| `records.ttl` | `number` | `600` | Positive integer seconds; must satisfy edition limits |
-| `records.line` | `string` | `"default"` | Line code permitted by the domain edition |
-| `records.remark` | `string` | `""` | UTF-8 remark, at most 16 characters |
-| `records.enable` | `bool` | `true` | Whether this individual record is enabled |
-| `records.weight` | `number` | `null` | Optional nonnegative integer for A/AAAA/CNAME, subject to edition limits and external load balancing |
+| Name | Type | Default | Required in create mode | Description |
+|---|---|---|---|---|
+| `create_zone` | `bool` | `true` | No | Whether to create and manage the zone; cannot be `null`. Choose the ownership mode before the first Apply. |
+| `zone_name` | `string` | `null` | Yes | Registered public domain in lowercase ASCII or punycode, at most 253 characters, with valid labels and no trailing dot. Keep `null` in existing-zone mode. |
+| `existing_zone_id` | `string` | `null` | No | Required in existing-zone mode; cannot be empty after trimming whitespace. Keep `null` in create mode. The caller retains ownership of the existing zone. |
+| `project_name` | `string` | `null` | No | Project for the created zone; cannot be a blank string when supplied. `null` uses provider defaults. Keep `null` in existing-zone mode. |
+| `zone_remark` | `string` | `null` | No | Remark for the created zone; `null` leaves it unspecified. Keep `null` in existing-zone mode. |
+| `tags` | `set(object({key=string,value=string}))` | `null` | No | Tags for the created zone. When supplied, the set must be nonempty, keys unique and nonblank, and values explicitly provided and non-null; empty values are allowed. Keep `null` in existing-zone mode. |
+| `acknowledge_external_weighted_routing` | `bool` | `false` | No | Cannot be `null`. Set to `true` in existing-zone mode when specifying weights, after externally enabling load balancing on every affected record set. This input neither enables nor checks the switch. |
+| `records` | `map(object)`, expanded below | none | Yes | Records keyed by stable logical names. Cannot be `null`, but may be `{}`. Required in both modes; keys cannot be blank. |
+| `records.host` | `string` | none | Required per record | Relative host prefix; `@` represents the domain apex. Cannot be blank. Do not replace a host prefix with the full zone name. |
+| `records.type` | `string` | none | Required per record | Uppercase `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS` or `SRV`. |
+| `records.value` | `string` | none | Required per record | Nonblank record value. A requires IPv4, AAAA requires IPv6, and MX uses `priority target` with priority 1–99, such as `10 mail.example.com`. Other types follow their DNS formats. |
+| `records.ttl` | `number` | `600` | No | Positive integer in seconds, within the domain edition's limits. |
+| `records.line` | `string` | `"default"` | No | Nonblank line code. Obtain non-default codes from ListLines/ListCustomLines and confirm that the domain edition permits them. |
+| `records.remark` | `string` | `""` | No | Individual record remark, at most 16 characters. |
+| `records.enable` | `bool` | `true` | No | Whether the record is enabled. `false` retains its configuration but does not serve that record in DNS answers. |
+| `records.weight` | `number` | `null` | No | Nonnegative integer for A, AAAA or CNAME only. Requires existing-zone mode, externally enabled load balancing and the acknowledgement input. |
 
-Records in a host/type/line group must share TTL and consistently specify or omit weights. Duplicate host/type/line/value tuples and CNAME coexistence with other types at the same host/line are rejected. These checks cover records declared in this module; the caller must inspect existing records for additional conflicts.
+The complete object type for `records` is:
+
+```hcl
+map(object({
+  host   = string
+  type   = string
+  value  = string
+  ttl    = optional(number, 600)
+  line   = optional(string, "default")
+  remark = optional(string, "")
+  enable = optional(bool, true)
+  weight = optional(number)
+}))
+```
+
+Records in the same `host/type/line` group must share a TTL and either all specify weights or all omit them. Duplicate `host/type/line/value` entries are rejected, as is CNAME coexistence with other types at the same host and line. Host comparisons are case-insensitive. These checks cover only the declared records; inspect external records for conflicts when using an existing zone. Consult the [record type formats](https://www.volcengine.com/docs/6758/145121) for complete value syntax.
 
 ## 8. Outputs
 
-| Name | Type | Meaning / empty values |
+| Name | Type | Description |
 |---|---|---|
-| `zone_id` | `string` | Created ZID or supplied existing ID |
-| `name_servers` | `set(string)` | Assigned authoritative servers; `null` in existing mode |
-| `zone_status` | `object({stage=number,cache_stage=number,is_ns_correct=bool})` | Provider status and ownership/delegation indicators; `null` in existing mode |
-| `record_ids` | `map(string)` | Cloud RecordID by logical key; `{}` with no records |
-| `record_set_ids` | `map(string)` | Cloud RecordSetID; individual values may be `null` outside A/AAAA/CNAME; no settings ownership |
-| `records` | `map(object({pqdn=string,type=string,ttl=number,line=string,enable=bool,weight=number}))` | Provider read-back by key; `{}` with no records |
-
-Record values are not output, but remain in Terraform state and plans. Treat TXT verification values and state as appropriate for your application.
+| `zone_id` | `string` | Created zone ZID or supplied existing zone ID, for associating other DNS configurations. |
+| `name_servers` | `set(string)` | All authoritative servers assigned to a created zone, for registrar or parent-zone NS delegation. `null` in existing-zone mode. |
+| `zone_status` | `object({stage=number,cache_stage=number,is_ns_correct=bool})` | Created-zone status, account ownership and NS configuration indicators. `null` in existing-zone mode, where the caller checks these separately. |
+| `record_ids` | `map(string)` | Logical names mapped to cloud RecordIDs. `{}` when there are no records. |
+| `record_set_ids` | `map(string)` | Logical names mapped to read-only cloud RecordSetIDs for locating record sets. Values follow the provider response and may be `null`; they do not imply ownership of record-set settings. |
+| `records` | `map(object({pqdn=string,type=string,ttl=number,line=string,enable=bool,weight=number}))` | Host name, type, TTL, line, enabled status and weight by logical name. `{}` when there are no records. Returned `weight` values cannot establish whether load balancing is enabled. |
 
 ## 9. Notes
 
-- Do not switch `create_zone` in place. Create mode owns the zone and its configured records; destroy removes those resources. Existing mode owns only the declared records and preserves the external zone.
-- Changing `zone_name` replaces the zone; changing record `value` or `host` plans an in-place update with both tested providers. These results come from synthetic state, not real cloud state. Changing logical record keys causes deletion/creation; consult the pinned plan for other fields and ID changes.
-- Import a zone to `module.dns.volcenginecc_dns_zone.this[0]` using `zid`; import each record to `module.dns.volcenginecc_dns_record.this["key"]` using `zid|record_id`. Ensure configuration matches and review a plan before applying. No automatic adoption or discovery occurs.
-- `project_name`, `zone_remark`, `tags` and optional record attributes use Optional+Computed provider fields. Null zone attributes leave configuration unspecified; clearing a previously specified value by changing to null is not proven. Tag removal and empty remarks remain unverified; configured zone tags, disabled-record read-back and second no-change plans passed real validation.
-- Record-set load balancing uses [UpdateRecordSet](https://www.volcengine.com/docs/6758/155111), which is absent from the verified DNS resource schema. `weight` read-back is not proof that weighted resolution works. The acknowledgement is a caller assertion, not an API check.
-- `record_set_id`, ownership, name servers and status are Computed-only; paid DNS edition, renewal, health checks, GTM locks and alias targets are not managed. No polling or command/SDK lifecycle bypass is included.
-- [CreateRecord](https://www.volcengine.com/docs/6758/155104) and [record type formats](https://www.volcengine.com/docs/6758/145121) define public DNS semantics. AWS Route53 zone/record and Alibaba DNS domain/record examples inform scenarios only; their schemas are not interchangeable.
-- Engineering standard: Lark document `C3TZdz2lnoAZmDxC7zRcOSgzn4d`, revision 2645, sections 5.3/5.5 and scene 54, read 2026-11-05. No local PRD/standard files were available; the user scenario and authoritative scene were used.
-- On 2026-11-05, basic and complete passed real plan/apply, independent API read-back, normal second plans with no changes and standard destroy with independent deletion confirmation using Terraform 1.5.7 and the online provider 0.0.73. Basic created and removed 2 resources; complete created and removed 10. Public resolution did not pass because the test domain remained delegated to its previous DNS provider, although complete answers from both assigned authoritative servers passed. Mobile-client routing behavior, weighted behavior, updates and Registry publication remain unverified. Recreate the zone and records before arranging delegation for another public-resolution test.
+- Set concurrency to 1 for Apply and Destroy. Use `terraform apply -parallelism=1` and `terraform destroy -parallelism=1` to execute resource operations sequentially. Pass this setting through the execution command.
+- Choose zone ownership before the first Apply. Destroy in create mode removes the zone and records managed by this configuration. Existing-zone mode removes only the declared records and preserves the zone. Migrate service records that must remain available before destroying a created zone.
+- Keep logical keys in `records` stable. Renaming or removing a key changes the corresponding resource address. Before changing the domain, host, value or other settings, review the planned additions, updates and deletions and arrange any required DNS cutover.
+- The module does not discover or adopt existing records automatically. Match configuration to each existing record and import it with `ZID|RecordID` into `module.dns.volcenginecc_dns_record.this["logical_name"]`. To adopt a zone in create mode, import its ZID into `module.dns.volcenginecc_dns_zone.this[0]`. Do not import the zone in existing-zone mode.
+- A `null` project, zone remark or tag set leaves that setting unspecified. To remove an existing setting, review the provider's plan and the resulting cloud configuration.
+- Enable weighted routing for the exact host, type and line record set through the console or [UpdateRecordSet](https://www.volcengine.com/docs/6758/155111) first. The caller maintains this switch; the module configures only individual record weights. Weight values do not guarantee actual request proportions.
+- The default line provides a fallback for source matching, without checking service health. CNAME is an ordinary DNS alias. Paid domain features, renewal, health checks and cloud-resource alias targets are outside this module's management scope.
+- After deployment, run a normal `terraform plan` again and require no changes for idempotence. Following a DNS change or deletion, recursive resolvers may keep returning cached answers until the original TTL expires.

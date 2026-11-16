@@ -1,124 +1,156 @@
 # terraform-volcenginecc-dns
 
-基于 VolcengineCC 管理公网 DNS 托管区域和单条解析记录的 Terraform 模块，明确区分线路路由与需外部启用的加权路由。
+使用 VolcengineCC 管理公网 DNS 区域和单条解析记录，支持线路路由及由调用方启用的加权路由。
 
 ## 1. 概述（Overview）
 
-创建一个 `volcenginecc_dns_zone`，通过稳定逻辑名称管理解析记录；也可传入调用方拥有的区域 ID，仅管理记录。每个 map 条目拥有一条单独记录，云端记录集 ID 仅作为只读输出。域名注册、所有权验证、注册商 NS 委派、服务端点及记录集负载均衡设置由调用方负责。
-
-可配置 A、AAAA、CNAME、MX、TXT、NS、SRV。可使用默认线路及功能版本允许的线路路由。已核对的 Provider Schema 中，没有健康检查故障转移或 Route53 别名目标对应的 DNS 字段或资源。CNAME 是普通 DNS 记录，遵循其正常限制。
+本 Module 可创建公网 DNS 区域并管理其中的 A、AAAA、CNAME、MX、TXT、NS、SRV 记录，也可通过已有区域 ID 仅管理记录。记录以稳定的逻辑名称标识，通过区域 ID 关联托管区域。域名注册、所有权验证、NS 委派、服务端点和记录集负载均衡设置由调用方管理。
 
 ## 2. 用法（Usage）
 
-Registry 地址用于后续发布；当前 draft 没有已发布模块版本，尚未验证 Registry 消费。静态验证仅在临时副本中重写 source。
+准备已注册且可管理的域名、服务地址，以及具有 DNS 区域和记录管理权限的火山引擎账号。使用 Terraform 1.5.7，在调用方项目配置 Provider，并通过运行环境设置 `VOLCENGINE_ACCESS_KEY` 和 `VOLCENGINE_SECRET_KEY`。
+
+以下 `example.com` 和 `192.0.2.10` 用于展示配置格式，使用时替换为你的域名和网站 IPv4 地址：
 
 ```hcl
-module "dns" {
-  source = "terraform-volcenginecc-modules/dns/volcenginecc"
+terraform {
+  required_version = ">= 1.5.7, < 1.12.0"
 
-  zone_name = var.registered_domain
+  required_providers {
+    volcenginecc = {
+      source  = "registry.terraform.io/volcengine/volcenginecc"
+      version = ">= 0.0.60"
+    }
+  }
+}
+
+provider "volcenginecc" {
+  region = "cn-beijing"
+}
+
+module "dns" {
+  source  = "terraform-volcenginecc-modules/dns/volcenginecc"
+  version = "~> 1.0"
+
+  zone_name = "example.com"
   records = {
     website = {
       host  = "www"
       type  = "A"
-      value = var.website_ipv4
+      value = "192.0.2.10"
     }
   }
 }
 ```
 
-Provider 认证和地域由调用方配置。通过凭据管理工具设置 `VOLCENGINE_ACCESS_KEY` 和 `VOLCENGINE_SECRET_KEY`。
+默认 `create_zone=true`，配置会创建一个区域和一条 `www` A 记录。接入已有区域时，设置 `create_zone=false` 和 `existing_zone_id`，并将 `zone_name`、`project_name`、`zone_remark`、`tags` 保持为 `null`；该模式只管理 `records` 中声明的记录，不查询或接管已有区域。
 
-```hcl
-provider "volcenginecc" {
-  region = "cn-beijing"
-}
+在调用方项目目录执行。Apply 和 Destroy 均使用 `-parallelism=1`，将本次 Terraform 执行的资源操作串行化。并发度通过执行参数设置，不作为 Module 输入变量。
+
+```shell
+terraform init
+terraform plan
+terraform apply -parallelism=1
 ```
 
-创建后在注册商配置全部 `name_servers`；子域名在父区域配置委派。必要时完成所有权验证，并检查 `zone_status`。仅创建区域不会自动建立公网 DNS 委派。
+新建区域后，将全部 `name_servers` 配置到注册商；使用子域名区域时，在父区域建立对应的 NS 委派。若云解析要求找回域名，先完成所有权验证。`zone_status.cache_stage=0` 表示当前账号可管理域名，`is_ns_correct=true` 表示 NS 配置正确，`stage=0` 表示区域正常。账号归属状态不等于域名已经注册或完成委派。
+
+完成委派后，用普通递归 DNS 查询实际业务域名，确认记录值正确；仅显式查询分配的权威服务器，不能确认公网委派已经生效。确认不再需要资源时再执行销毁：
+
+```shell
+terraform plan
+terraform destroy -parallelism=1
+```
+
+Apply 后的第二次 Plan 应显示无变化。销毁前确认区域和记录的归属，并迁移仍需保留的业务解析。
 
 ## 3. 示例（Examples）
 
-- `examples/basic`：一个已注册域名、一条网站 A 记录和分配的 NameServer 输出。
-- `examples/complete`：A/AAAA/CNAME/MX/TXT、多记录集、显式 TTL、记录启停、区域项目和标签，以及带默认兜底的非默认 API 线路。需提供域名功能版本允许的线路代码。
-- complete 可选加权场景在已有区域配置两个权重为 80/20 的 A 记录值。需先在外部对准确的 `weighted`/`A`/`default` 记录集启用负载均衡；模块不能启用或检查该开关。已有加权记录必须 import，或从本模块配置中排除，避免重复创建。
-- 健康检查故障转移和别名场景推迟到 Provider 提供对应生命周期及配置后实现。当前不宣称存在可运行的故障转移示例。
+- basic：在 `examples/basic` 执行，为已注册域名创建区域和一条网站 A 记录，输出区域 ID、NameServer、区域状态和记录 ID。调用方准备域名、网站 IPv4 地址及注册商配置权限。
+- complete：在 `examples/complete` 执行，配置 A、AAAA、CNAME、MX、SPF TXT、禁用 TXT，以及具有默认兜底的非默认 API 线路。可创建带项目和标签的区域，或仅管理已有区域的记录；AAAA 通过独立的 `dns_ipv6` 调用在其他记录完成后创建。可选 80/20 加权场景需要已有区域和外部启用的记录集负载均衡。
 
 ## 4. 版本要求（Requirements）
 
-| 名称 | 版本 / 前提 |
+| 名称 | 版本 |
 |---|---|
-| Terraform | 静态验证通过：`1.5.7` |
-| OpenTofu | 静态验证通过：`1.11.8` |
-| 共用引擎约束 | `>= 1.5.7, < 1.12.0`；未逐一验证区间内其他版本 |
-| Provider 最低版本 | `0.0.60`；其 Schema 已包含区域及全部所用记录字段 |
-| Provider 当前已验证版本 | `0.0.73`，发布于 2026-10-26 |
-| 域名 | 已注册公网域名，并具有管理 DNS 和修改委派的权限 |
-| 高级路由 | 域名功能版本允许所用线路代码、TTL 和权重 |
+| Terraform | `>= 1.5.7, < 1.12.0` |
+| `volcengine/volcenginecc` | `>= 0.0.60` |
 
-当前状态：**draft**，因为加权路由依赖外部配置，故障转移和别名能力尚待实现。静态验证不代表公网解析已生效或已具备生产可用性。
-
-2026-11-05，两种引擎搭配 Provider 0.0.60 和 0.0.73，均通过根模块、basic、complete 和生命周期 fixture 的 fmt/init/validate/静态 Plan，以及可选既有区域加权配置和 15 项负例 Plan。双语文档与 Shell 语法检查通过。ShellCheck、TFLint 和 terraform-docs 不可用，未执行。
+操作步骤使用 Terraform 1.5.7。Module 的 `version = "~> 1.0"` 约束与 Provider 版本约束分别配置。
 
 ## 5. Providers（Providers）
 
-| 名称 | 来源 | 约束 |
-|---|---|---|
-| `volcenginecc` | `registry.terraform.io/volcengine/volcenginecc` | `>= 0.0.60` |
+| 名称 | 来源 |
+|---|---|
+| `volcenginecc` | `registry.terraform.io/volcengine/volcenginecc` |
+
+Provider 的地域和认证由调用方配置；本 Module 不声明 Provider alias。
 
 ## 6. 资源（Resources）
 
-| 模式 | 类型 | 地址 / 职责 |
+| 模式 | 类型 | 名称 |
 |---|---|---|
-| 创建 | [volcenginecc_dns_zone](https://registry.terraform.io/providers/volcengine/volcenginecc/0.0.73/docs/resources/dns_zone) | `volcenginecc_dns_zone.this[0]`：拥有一个区域 |
-| 两种模式 | [volcenginecc_dns_record](https://registry.terraform.io/providers/volcengine/volcenginecc/0.0.73/docs/resources/dns_record) | `volcenginecc_dns_record.this[key]`：拥有单条记录 |
+| 创建区域，`create_zone=true` | Resource：`volcenginecc_dns_zone` | [`volcenginecc_dns_zone.this[0]`](https://registry.terraform.io/providers/volcengine/volcenginecc/latest/docs/resources/dns_zone) |
+| 创建区域或使用已有区域 | Resource：`volcenginecc_dns_record` | [`volcenginecc_dns_record.this[key]`](https://registry.terraform.io/providers/volcengine/volcenginecc/latest/docs/resources/dns_record) |
 
-未使用 Data Source。外部区域通过 ID 传入，模块不查询或销毁该区域。
+区域资源最多创建一个实例，记录实例数由 `records` 的条目数决定。每个条目管理一条单独记录，即使云端将多条记录归入同一记录集。本 Module 不声明 Data Source。
 
 ## 7. 输入（Inputs）
 
-| 名称 | 类型 | 默认值 | 必填条件 / 说明 |
-|---|---|---|---|
-| `create_zone` | `bool` | `true` | 首次 apply 前确定归属模式 |
-| `zone_name` | `string` | `null` | 创建模式必填；小写 ASCII/punycode 域名，不带末尾点 |
-| `existing_zone_id` | `string` | `null` | 既有模式必填；区域由调用方拥有 |
-| `project_name` | `string` | `null` | 新建区域所属项目；既有模式不可设置 |
-| `zone_remark` | `string` | `null` | 新建区域备注；既有模式不可设置 |
-| `tags` | `set(object({key=string,value=string}))` | `null` | 新建区域标签；必须显式提供值，key 非空且唯一；拒绝空集合 |
-| `acknowledge_external_weighted_routing` | `bool` | `false` | 既有模式显式设置权重时必须为 true；外部开关仍由调用方拥有 |
-| `records` | `map(object(...))` | 无 | 必填，可为空；稳定 key 拥有单条记录 |
-| `records.host` | `string` | 无 | 必填相对前缀；`@` 表示根域；不要传完整区域名称 |
-| `records.type` | `string` | 无 | 必填大写 A/AAAA/CNAME/MX/TXT/NS/SRV |
-| `records.value` | `string` | 无 | 必填；MX 如 `10 mail.domain`，优先级 1-99；TXT 原样传递 |
-| `records.ttl` | `number` | `600` | 正整数秒；必须满足功能版本限制 |
-| `records.line` | `string` | `"default"` | 域名功能版本允许的线路代码 |
-| `records.remark` | `string` | `""` | UTF-8 备注，不超过 16 个字符 |
-| `records.enable` | `bool` | `true` | 是否启用该单条记录 |
-| `records.weight` | `number` | `null` | A/AAAA/CNAME 可选非负整数；受功能版本及外部负载均衡开关约束 |
+| 名称 | 类型 | 默认值 | 创建模式下是否必填 | 说明 |
+|---|---|---|---|---|
+| `create_zone` | `bool` | `true` | 否 | 是否创建并管理区域；不接受 `null`。首次 Apply 前确定归属模式。 |
+| `zone_name` | `string` | `null` | 是 | 已注册公网域名，小写 ASCII 或 punycode，总长度不超过 253，标签格式合法且不带末尾点；已有区域模式保持 `null`。 |
+| `existing_zone_id` | `string` | `null` | 否 | 已有区域模式必填，去除首尾空白后不能为空；创建模式保持 `null`。已有区域仍由调用方管理。 |
+| `project_name` | `string` | `null` | 否 | 新建区域所属项目；指定时不能为空白字符串。`null` 使用 Provider 默认行为；已有区域模式保持 `null`。 |
+| `zone_remark` | `string` | `null` | 否 | 新建区域备注；`null` 表示未指定。已有区域模式保持 `null`。 |
+| `tags` | `set(object({key=string,value=string}))` | `null` | 否 | 新建区域标签；指定时集合非空，键唯一且不为空白，值必须显式提供且不能为 `null`，可为空字符串。已有区域模式保持 `null`。 |
+| `acknowledge_external_weighted_routing` | `bool` | `false` | 否 | 不接受 `null`。显式设置记录权重时，在已有区域模式设为 `true`，确认所有受影响记录集已在外部启用负载均衡；该变量不启用或检查开关。 |
+| `records` | `map(object)`，结构如下 | 无 | 是 | 以稳定逻辑名称为键的记录集合；不接受 `null`，可为 `{}`。两种模式均必填，键不能全为空白。 |
+| `records.host` | `string` | 无 | 每条记录必填 | 相对主机记录，`@` 表示根域名；不能为空白字符串，不使用完整区域名代替主机前缀。 |
+| `records.type` | `string` | 无 | 每条记录必填 | 大写类型：`A`、`AAAA`、`CNAME`、`MX`、`TXT`、`NS`、`SRV`。 |
+| `records.value` | `string` | 无 | 每条记录必填 | 非空白记录值；A 为 IPv4，AAAA 为 IPv6，MX 为 `优先级 目标域名`，优先级为 1–99，例如 `10 mail.example.com`；其他类型遵循 DNS 格式。 |
+| `records.ttl` | `number` | `600` | 否 | 正整数，单位为秒；取值需符合域名功能版本的限制。 |
+| `records.line` | `string` | `"default"` | 否 | 非空白线路代码；非默认线路从 ListLines/ListCustomLines 获取，并确认域名功能版本允许使用。 |
+| `records.remark` | `string` | `""` | 否 | 单条记录备注，最多 16 个字符。 |
+| `records.enable` | `bool` | `true` | 否 | 是否启用该记录；`false` 保留配置但不提供该记录的解析答案。 |
+| `records.weight` | `number` | `null` | 否 | 仅 A、AAAA、CNAME 可设置非负整数权重；只能用于已有区域模式，并配合外部负载均衡和确认变量。 |
 
-同一 host/type/line 组内必须使用相同 TTL，且统一设置或省略权重。拒绝重复 host/type/line/value，以及同 host/line 下 CNAME 与其他类型共存。这些检查仅覆盖本模块声明的记录；调用方需检查已有记录的额外冲突。
+`records` 的完整对象类型为：
+
+```hcl
+map(object({
+  host   = string
+  type   = string
+  value  = string
+  ttl    = optional(number, 600)
+  line   = optional(string, "default")
+  remark = optional(string, "")
+  enable = optional(bool, true)
+  weight = optional(number)
+}))
+```
+
+同一 `host/type/line` 组内的记录使用相同 TTL，并统一设置或省略权重。不能重复声明同一 `host/type/line/value`，也不能在同一主机和线路上混用 CNAME 与其他类型；主机名比较不区分大小写。这些校验只覆盖本次声明的记录，接入已有区域时还需检查外部记录是否冲突。完整记录值格式可查阅[记录类型格式](https://www.volcengine.com/docs/6758/145121)。
 
 ## 8. 输出（Outputs）
 
-| 名称 | 类型 | 含义 / 空值 |
+| 名称 | 类型 | 说明 |
 |---|---|---|
-| `zone_id` | `string` | 新建区域 ZID 或传入的既有 ID |
-| `name_servers` | `set(string)` | 分配的权威服务器；既有模式为 `null` |
-| `zone_status` | `object({stage=number,cache_stage=number,is_ns_correct=bool})` | Provider 状态及所有权、委派指标；既有模式为 `null` |
-| `record_ids` | `map(string)` | 按逻辑 key 输出云端 RecordID；无记录为 `{}` |
-| `record_set_ids` | `map(string)` | 云端 RecordSetID；非 A/AAAA/CNAME 的值可能为 `null`；不拥有记录集设置 |
-| `records` | `map(object({pqdn=string,type=string,ttl=number,line=string,enable=bool,weight=number}))` | 按 key 输出 Provider 回读；无记录为 `{}` |
-
-不输出记录值，但记录值仍会进入 Terraform State 和 Plan。请按业务需要保护 TXT 验证值和 State。
+| `zone_id` | `string` | 新建区域的 ZID 或传入的已有区域 ID，可用于关联其他解析配置。 |
+| `name_servers` | `set(string)` | 新建区域分配的全部权威服务器，用于注册商或父区域的 NS 委派；已有区域模式为 `null`。 |
+| `zone_status` | `object({stage=number,cache_stage=number,is_ns_correct=bool})` | 新建区域的运行状态、账号归属及 NS 配置状态；已有区域模式为 `null`，需由调用方检查。 |
+| `record_ids` | `map(string)` | 逻辑名称到云端 RecordID 的映射；没有记录时为 `{}`。 |
+| `record_set_ids` | `map(string)` | 逻辑名称到云端 RecordSetID 的只读映射，用于定位记录集；值以 Provider 返回为准，可能为 `null`，不表示 Module 管理记录集设置。 |
+| `records` | `map(object({pqdn=string,type=string,ttl=number,line=string,enable=bool,weight=number}))` | 按逻辑名称返回记录的主机名、类型、TTL、线路、启停和权重；没有记录时为 `{}`。其中 `weight` 的返回值不能用于判断负载均衡是否启用。 |
 
 ## 9. 其他说明（Notes）
 
-- 不要原地切换 `create_zone`。创建模式拥有区域及配置的记录，destroy 删除这些资源；既有模式仅拥有声明的记录，保留外部区域。
-- 修改 `zone_name` 会替换区域；两种已测试 Provider 中，修改记录 `value` 或 `host` 的 Plan 为原地更新。这些结果来自合成 State，不代表真实云 State。修改记录逻辑 key 会删除并新建记录；其他字段及 ID 变更应检查固定版本 Plan。
-- 使用 `zid` 将区域 import 到 `module.dns.volcenginecc_dns_zone.this[0]`；使用 `zid|record_id` 将记录 import 到 `module.dns.volcenginecc_dns_record.this["key"]`。确保配置匹配，先检查 Plan 再 apply。模块不自动接管或发现已有资源。
-- `project_name`、`zone_remark`、`tags` 及可选记录属性对应 Optional+Computed 字段。区域属性为 null 表示未指定；将已设置的值改为 null 是否清除，尚未证明。标签移除和空备注仍未验证；配置的区域标签、禁用记录回读及二次 Plan 无变更已通过真实验证。
-- 记录集负载均衡使用 [UpdateRecordSet](https://www.volcengine.com/docs/6758/155111)，当前已验证 DNS 资源 Schema 不包含该能力。`weight` 回读不能证明加权解析生效；确认变量只是调用方声明，不是 API 检查。
-- `record_set_id`、所有权、NameServer 和状态均为 Computed-only；不管理付费功能版本、续费、健康检查、GTM 锁和别名目标。未引入轮询或命令/SDK 生命周期绕过。
-- [CreateRecord](https://www.volcengine.com/docs/6758/155104) 和[记录类型格式](https://www.volcengine.com/docs/6758/145121)定义公网 DNS 语义。AWS Route53 zone/record 和阿里云 DNS domain/record 示例仅用于场景参考，字段不可互换。
-- 工程规范来源：飞书文档 `C3TZdz2lnoAZmDxC7zRcOSgzn4d`，revision 2645，5.3/5.5 节及场景 54，读取日期 2026-11-05。未找到本地 PRD/规范文件，使用用户场景及权威场景条目。
-- 2026-11-05，使用 Terraform 1.5.7 与线上 Provider 0.0.73，basic 和 complete 均通过真实 Plan/Apply、独立 API 回读、正常刷新后二次 Plan 无变更，以及标准 Destroy 和独立删除确认。basic 创建并删除 2 个资源，complete 创建并删除 10 个。测试域名仍委派至原 DNS 服务商，公网解析未通过；complete 在两个分配的权威服务器上查询通过。移动客户端线路行为、加权行为、更新操作及 Registry 发布仍未验证。下次公网解析复验需先重建区域和记录，再安排委派。
+- Apply 和 Destroy 的并发度设为 1，使用 `terraform apply -parallelism=1` 和 `terraform destroy -parallelism=1` 串行执行资源操作。该设置通过运行命令传入。
+- 在首次 Apply 前选择区域归属模式。创建模式的 Destroy 删除区域及本配置管理的记录；已有区域模式只删除声明的记录，保留区域。销毁自建区域前，迁移其中仍需保留的业务记录。
+- 保持 `records` 的逻辑键稳定。更名或删除键会改变对应记录的资源地址；修改域名、主机、记录值等配置前，检查 Plan 的新增、更新和删除范围，并安排必要的解析切换。
+- Module 不自动发现或接管已有记录。接管记录时，将配置与云端记录匹配，并使用 `ZID|RecordID` 导入对应的 `module.dns.volcenginecc_dns_record.this["逻辑名称"]`；创建模式接管已有区域时，使用 ZID 导入 `module.dns.volcenginecc_dns_zone.this[0]`。已有区域模式不导入区域。
+- 项目、区域备注和标签为 `null` 时表示未指定；需要移除已有设置时，先检查 Provider 的变更计划和云端结果。
+- 加权路由先通过控制台或 [UpdateRecordSet](https://www.volcengine.com/docs/6758/155111) 对准确的主机、类型、线路记录集启用负载均衡。开关由调用方维护，Module 只配置单条记录的权重；权重值不保证实际请求比例。
+- 默认线路为来源匹配提供兜底，不检测服务健康。CNAME 是普通 DNS 别名；域名付费功能、续费、健康检查和云资源别名目标不由本 Module 管理。
+- 部署后再次执行正常的 `terraform plan`，确认结果无变化，以满足幂等要求。解析修改或删除后，递归 DNS 可能在原 TTL 到期前继续返回缓存答案。
